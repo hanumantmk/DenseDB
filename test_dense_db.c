@@ -2,6 +2,24 @@
 #include <stdlib.h>
 #include "dense_db.h"
 
+void pp_stats(dense_db_table_t * table)
+{
+  dense_db_field_t * fields = table->metadata->fields;
+  size_t n_fields = table->metadata->n_fields;
+
+  printf(
+    "Table Name: %s\n"
+    "      Rows: %d\n"
+    "  Row Size: %d\n"
+    "    Fields:\n"
+    , table->metadata->name, table->rows, table->metadata->row_size);
+
+  int i;
+  for (i = 0; i < n_fields; i++) {
+    printf("  %s:\t%d\n", fields[i].name, fields[i].size);
+  }
+}
+
 void pp(dense_db_table_t * table)
 {
   dense_db_field_t * fields = table->metadata->fields;
@@ -81,9 +99,17 @@ int main (int argc, char ** argv)
 
   dense_table_sync(table);
 
+  pp_stats(table);
+
   pp(table);
 
   dense_db_table_destroy(table);
+
+  dense_db_open_table(db, "foo");
+
+  pp_stats(table);
+
+  pp(table);
 
   dense_db_destroy(db);
 

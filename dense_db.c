@@ -27,6 +27,8 @@ do { \
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
+#define round_up_to_n(x, n) ((x) + (n) - ((x) % (n)))
+
 #define ERROR_AT_LINE(fmt, ...) error_at_line(1, errno, __FILE__, __LINE__, fmt , ##__VA_ARGS__)
 
 uint64_t bit_get(uint64_t * storage, int size, int offset)
@@ -107,7 +109,7 @@ void dense_db_table_get(dense_db_table_t * table, uint64_t row, dense_db_accesso
     if (offset < 64) {
       int inner_size = MIN(size, 64 - offset);
       int inner_size4mem = MIN(size, 64);
-      inner_size4mem = (inner_size4mem + (inner_size4mem % 8)) / 8;
+      inner_size4mem = round_up_to_n(inner_size4mem, 8) / 8;
       if (! inner_size4mem) inner_size4mem = 1;
 
       int inner_offset = MAX(offset, 0);
@@ -161,7 +163,7 @@ void dense_db_table_set(dense_db_table_t * table, uint64_t row, dense_db_accesso
     if (offset < 64) {
       int inner_size = MIN(size, 64 - offset);
       int inner_size4mem = MIN(size, 64);
-      inner_size4mem = (inner_size4mem + (inner_size4mem % 8)) / 8;
+      inner_size4mem = round_up_to_n(inner_size4mem, 8) / 8;
       if (! inner_size4mem) inner_size4mem = 1;
 
       int inner_offset = MAX(offset, 0);
@@ -203,6 +205,8 @@ dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_
   dense_db_table_t * table = calloc(sizeof(*table), 1);
   dense_db_table_md_t * md = calloc(sizeof(*md), 1);
 
+  md->name = strdup(name);
+
   md->fields = malloc(sizeof(dense_db_field_t) * n_fields);
 
   md->n_fields = n_fields;
@@ -218,7 +222,7 @@ dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_
     md->row_size += fields[i].size;
   }
 
-  md->row_size += md->row_size % 8;
+  md->row_size = round_up_to_n(md->row_size, 8);
 
   md->header_size = header_size;
 
@@ -233,7 +237,7 @@ dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_
   free(fname);
 
   size_t total_size = header_size + rows * md->row_size / 8;
-  total_size += total_size % 8;
+  total_size = round_up_to_n(total_size, 8);
 
   if (ftruncate(fd, total_size) < 0) ERROR_AT_LINE("Error in reserving %zd bytes for the table with fd %d", total_size, fd);
 
@@ -284,6 +288,7 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
   dense_db_table_md_t * md = calloc(sizeof(*md), 1);
 
   table->metadata = md;
+  md->name = strdup(name);
 
   char * path;
   assert(asprintf(&path, "%s/%s", db->storage_path, name) > 0);
@@ -327,8 +332,12 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
 
     memcpy(&buf, ptr, 4);
 
+    ptr += 4;
+
     md->fields[i].size = be32toh(buf);
+    md->row_size += md->fields[i].size;
   }
+  md->row_size = round_up_to_n(md->row_size, 8);
 
   return table;
 }
@@ -340,6 +349,7 @@ void dense_db_table_md_destroy(dense_db_table_md_t * md)
     free(md->fields[i].name);
   }
 
+  free(md->name);
   free(md->fields);
   free(md);
 }
@@ -349,6 +359,8 @@ void dense_db_table_destroy(dense_db_table_t * table)
   dense_db_table_md_destroy(table->metadata);
 
   if (munmap(table->data, table->size) < 0) ERROR_AT_LINE("Error in munmap");
+
+  if (close(table->fd) < 0) ERROR_AT_LINE("Error in close");
 
   free(table);
 }
