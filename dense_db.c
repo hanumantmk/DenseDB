@@ -27,7 +27,7 @@ do { \
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-#define round_up_to_n(x, n) ((x) + (n) - ((x) % (n)))
+#define round_up_to_n(x, n) ((((x) % (n)) == 0) ? (x) : ((x) + (n) - ((x) % (n))))
 
 #define ERROR_AT_LINE(fmt, ...) error_at_line(1, errno, __FILE__, __LINE__, fmt , ##__VA_ARGS__)
 
