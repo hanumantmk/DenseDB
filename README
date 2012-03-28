@@ -1,0 +1,11 @@
+DenseDB
+=======
+
+DenseDB is a bit packing, file backed, db library for fixed width use in C.  It
+presumes that you access rows by an integer index and that you know the number
+of entries you're likely to want up front.
+
+That's a pretty specific set of requirements and things may grow more flexible
+with time, but that's what you've got for now.
+
+Enjoy!

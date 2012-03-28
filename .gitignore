@@ -1,0 +1,6 @@
+tags
+*.o
+foo
+AutoMakefile
+cpuprof
+test_dense_db
