@@ -4,6 +4,7 @@ default: tags AUTOMAKEFILE_DEFAULT
 
 LFLAGS+= -lprofiler
 CFLAGS+= -Wall -Werror -ggdb3 -O3
+#CFLAGS+= -DDEBUG=1
 TARGETS=test_dense_db
 
 clean: AUTOMAKEFILE_CLEAN

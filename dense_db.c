@@ -15,13 +15,35 @@
 #include <errno.h>
 #include "dense_db.h"
 
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+
+#define DEBUG_LOG(fmt, ...) \
+do { \
+  if (DEBUG) printf(fmt , ##__VA_ARGS__); \
+} while(0)
+
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-#define ribble_get(storage, size, offset) (((storage) >> (offset)) & ((1ull << (size)) - 1ull))
-#define ribble_set(storage, size, offset, set) ((storage) = ((storage) & ~(((1ull << (size)) - 1ull) << (offset))) | ((set) << (offset)))
-
 #define ERROR_AT_LINE(fmt, ...) error_at_line(1, errno, __FILE__, __LINE__, fmt , ##__VA_ARGS__)
+
+uint64_t bit_get(uint64_t * storage, int size, int offset)
+{
+  uint64_t r = (*storage >> offset) & ((1ull << size) - 1ull);
+
+  DEBUG_LOG("%p: %llu = bit_get(%d, %d)\n", storage, r, size, offset);
+
+  return r;
+}
+
+void bit_set(uint64_t * storage, int size, int offset, uint64_t set)
+{
+  *storage = (*storage & ~(((1ull << size) - 1ull) << offset)) | (set << offset);
+
+  DEBUG_LOG("%p: bit_set(%d, %d, %llu)\n", storage, size, offset, set);
+}
 
 dense_db_t * dense_db_new(char * storage_path)
 {
@@ -85,14 +107,17 @@ void dense_db_table_get(dense_db_table_t * table, uint64_t row, dense_db_accesso
     if (offset < 64) {
       int inner_size = MIN(size, 64 - offset);
       int inner_size4mem = MIN(size, 64);
+      inner_size4mem = (inner_size4mem + (inner_size4mem % 8)) / 8;
+      if (! inner_size4mem) inner_size4mem = 1;
+
       int inner_offset = MAX(offset, 0);
 
-      uint64_t r = ribble_get(*data, inner_size, inner_offset);
+      uint64_t r = bit_get(data, inner_size, inner_offset);
 
       data++;
 
       if (size > 64 && offset) {
-	uint64_t ir = ribble_get(*data, offset, 0);
+	uint64_t ir = bit_get(data, offset, 0);
 
 	ir <<= (64 - offset);
 
@@ -101,7 +126,7 @@ void dense_db_table_get(dense_db_table_t * table, uint64_t row, dense_db_accesso
 	offset = 0;
       }
 
-      memcpy(ptr, &r, (inner_size4mem + (inner_size4mem % 8)) / 8);
+      memcpy(ptr, &r, inner_size4mem);
 
       ptr += 8;
 
@@ -136,19 +161,22 @@ void dense_db_table_set(dense_db_table_t * table, uint64_t row, dense_db_accesso
     if (offset < 64) {
       int inner_size = MIN(size, 64 - offset);
       int inner_size4mem = MIN(size, 64);
+      inner_size4mem = (inner_size4mem + (inner_size4mem % 8)) / 8;
+      if (! inner_size4mem) inner_size4mem = 1;
+
       int inner_offset = MAX(offset, 0);
 
       uint64_t val = 0;
-      memcpy(&val, ptr, (inner_size4mem + (inner_size4mem % 8)) / 8);
+      memcpy(&val, ptr, inner_size4mem);
 
-      ribble_set(*data, inner_size, inner_offset, val);
+      bit_set(data, inner_size, inner_offset, val);
 
       data++;
 
       if (size > 64 && offset) {
 	val >>= (64 - offset);
 
-	ribble_set(*data, offset, 0, val);
+	bit_set(data, offset, 0, val);
       } else {
 	offset = 0;
       }
