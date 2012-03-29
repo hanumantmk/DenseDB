@@ -47,6 +47,72 @@ void bit_set(uint64_t * storage, int size, int offset, uint64_t set)
   DEBUG_LOG("%p: bit_set(%d, %d, %llu)\n", storage, size, offset, set);
 }
 
+static void bit_fiddle(void * buf, int size, int offset, void * param, int is_read)
+{
+  uint64_t * data = buf;
+
+  uint64_t * ptr = param;
+
+  // Move the data pointer up until we're in the right 64 bit word
+  if (offset >= 64) {
+    data += offset / 64;
+    offset = offset % 64;
+  }
+
+  // Loop until we've read or written all we set out to
+  for (; size > 0; size -= 64) {
+    // only work with as many bits as fit in the word
+    int inner_size = MIN(size, 64 - offset);
+
+    // memcpy has to round up to the nearest byte
+    int inner_size4mem = round_up_to_n(MIN(size, 64), 8) / 8;
+
+    // This get's interleaved for reads and writes
+    uint64_t val;
+
+    if (is_read) {
+      val = bit_get(data, inner_size, offset);
+    } else {
+      val = 0;
+      memcpy(&val, ptr, inner_size4mem);
+
+      bit_set(data, inner_size, offset, val);
+    }
+
+    // We've read or written all we can in one pass
+    data++;
+
+    if (size > 64 && offset) {
+      // If there's something left over
+      
+      if (is_read) {
+	// read the remaining bytes from the next memory location and merge
+	// them with what you got in the last read
+	uint64_t ir = bit_get(data, offset, 0);
+
+	ir <<= (64 - offset);
+
+	val |= ir;
+      } else {
+	// write the remaining bits into the next memory location
+	val >>= (64 - offset);
+
+	bit_set(data, offset, 0, val);
+      }
+    } else {
+      // The next bit of work to do is right at the byte boundary
+      offset = 0;
+    }
+
+    if (is_read) {
+      // We've been accumulating in val, now write it out
+      memcpy(ptr, &val, inner_size4mem);
+    }
+
+    ptr++;
+  }
+}
+
 dense_db_t * dense_db_new(char * storage_path)
 {
   dense_db_t * db = calloc(sizeof(*db), 1);
@@ -96,48 +162,9 @@ dense_db_accessor_t dense_db_table_get_accessor(dense_db_table_t * table, char *
 
 void dense_db_table_get(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc, void * out)
 {
-  uint64_t * data = (uint64_t *)(table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
+  void * data = (table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
 
-  char * ptr = out;
-
-  int size = acc.size;
-  int offset = acc.offset;
-
-  while (1) {
-    if (size < 0) break;
-
-    if (offset < 64) {
-      int inner_size = MIN(size, 64 - offset);
-      int inner_size4mem = MIN(size, 64);
-      inner_size4mem = round_up_to_n(inner_size4mem, 8) / 8;
-      if (! inner_size4mem) inner_size4mem = 1;
-
-      int inner_offset = MAX(offset, 0);
-
-      uint64_t r = bit_get(data, inner_size, inner_offset);
-
-      data++;
-
-      if (size > 64 && offset) {
-	uint64_t ir = bit_get(data, offset, 0);
-
-	ir <<= (64 - offset);
-
-	r |= ir;
-      } else {
-	offset = 0;
-      }
-
-      memcpy(ptr, &r, inner_size4mem);
-
-      ptr += 8;
-
-      size -= 64;
-    } else {
-      data++;
-      offset -= 64;
-    }
-  }
+  bit_fiddle(data, acc.size, acc.offset, out, 1);
 }
 
 uint64_t dense_db_table_get_int(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc)
@@ -150,47 +177,9 @@ uint64_t dense_db_table_get_int(dense_db_table_t * table, uint64_t row, dense_db
 
 void dense_db_table_set(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc, void * in)
 {
-  uint64_t * data = (uint64_t *)(table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
+  void * data = (table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
 
-  int size = acc.size;
-  int offset = acc.offset;
-
-  char * ptr = in;
-
-  while (1) {
-    if (size < 0) break;
-
-    if (offset < 64) {
-      int inner_size = MIN(size, 64 - offset);
-      int inner_size4mem = MIN(size, 64);
-      inner_size4mem = round_up_to_n(inner_size4mem, 8) / 8;
-      if (! inner_size4mem) inner_size4mem = 1;
-
-      int inner_offset = MAX(offset, 0);
-
-      uint64_t val = 0;
-      memcpy(&val, ptr, inner_size4mem);
-
-      bit_set(data, inner_size, inner_offset, val);
-
-      data++;
-
-      if (size > 64 && offset) {
-	val >>= (64 - offset);
-
-	bit_set(data, offset, 0, val);
-      } else {
-	offset = 0;
-      }
-
-      ptr += 8;
-
-      size -= 64;
-    } else {
-      data++;
-      offset -= 64;
-    }
-  }
+  bit_fiddle(data, acc.size, acc.offset, in, 0);
 }
 
 void dense_db_table_set_int(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc, uint64_t in)
