@@ -31,7 +31,7 @@ do { \
 
 #define ERROR_AT_LINE(fmt, ...) error_at_line(1, errno, __FILE__, __LINE__, fmt , ##__VA_ARGS__)
 
-uint64_t bit_get(uint64_t * storage, int size, int offset)
+static uint64_t bit_get(uint64_t * storage, int size, int offset)
 {
   uint64_t r = (*storage >> offset) & ((1ull << size) - 1ull);
 
@@ -40,7 +40,7 @@ uint64_t bit_get(uint64_t * storage, int size, int offset)
   return r;
 }
 
-void bit_set(uint64_t * storage, int size, int offset, uint64_t set)
+static void bit_set(uint64_t * storage, int size, int offset, uint64_t set)
 {
   *storage = (*storage & ~(((1ull << size) - 1ull) << offset)) | (set << offset);
 
@@ -122,7 +122,7 @@ dense_db_t * dense_db_new(char * storage_path)
   return db;
 }
 
-static off_t get_size(int fd)
+static off_t get_file_size(int fd)
 {
   struct stat sb;
   fstat(fd, &sb);
@@ -148,13 +148,13 @@ dense_db_accessor_t dense_db_table_get_accessor(dense_db_table_t * table, char *
   dense_db_accessor_t acc = { 0 };
 
   int i;
-  for (i = 0; i < table->metadata->n_fields; i++) {
-    if (strcmp(table->metadata->fields[i].name, field) == 0) {
-      acc.size = table->metadata->fields[i].size;
+  for (i = 0; i < table->n_fields; i++) {
+    if (strcmp(table->fields[i].name, field) == 0) {
+      acc.size = table->fields[i].size;
       break;
     }
 
-    acc.offset += table->metadata->fields[i].size;
+    acc.offset += table->fields[i].size;
   }
 
   return acc;
@@ -162,7 +162,7 @@ dense_db_accessor_t dense_db_table_get_accessor(dense_db_table_t * table, char *
 
 void dense_db_table_get(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc, void * out)
 {
-  void * data = (table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
+  void * data = (table->data + table->header_size + (row * table->row_size / 8));
 
   bit_fiddle(data, acc.size, acc.offset, out, 1);
 }
@@ -177,7 +177,7 @@ uint64_t dense_db_table_get_int(dense_db_table_t * table, uint64_t row, dense_db
 
 void dense_db_table_set(dense_db_table_t * table, uint64_t row, dense_db_accessor_t acc, void * in)
 {
-  void * data = (table->data + table->metadata->header_size + (row * table->metadata->row_size / 8));
+  void * data = (table->data + table->header_size + (row * table->row_size / 8));
 
   bit_fiddle(data, acc.size, acc.offset, in, 0);
 }
@@ -189,33 +189,30 @@ void dense_db_table_set_int(dense_db_table_t * table, uint64_t row, dense_db_acc
   dense_db_table_set(table, row, acc, &num);
 }
 
-dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_field_t * fields, size_t n_fields, size_t rows)
+dense_db_table_t * dense_db_table_create(dense_db_t * db, char * name, dense_db_field_t * fields, size_t n_fields, size_t rows)
 {
   dense_db_table_t * table = calloc(sizeof(*table), 1);
-  dense_db_table_md_t * md = calloc(sizeof(*md), 1);
 
-  md->name = strdup(name);
+  table->name = strdup(name);
 
-  md->fields = malloc(sizeof(dense_db_field_t) * n_fields);
+  table->fields = malloc(sizeof(dense_db_field_t) * n_fields);
 
-  md->n_fields = n_fields;
+  table->n_fields = n_fields;
   size_t header_size = 12; // to accomodate for the leader header length, n_fields and rows
 
   int i;
   for (i = 0; i < n_fields; i++) {
-    md->fields[i].name = strdup(fields[i].name);
-    md->fields[i].size = fields[i].size;
+    table->fields[i].name = strdup(fields[i].name);
+    table->fields[i].size = fields[i].size;
 
     header_size += strlen(fields[i].name) + 1;
     header_size += 4;  // 32 bit field lengths;
-    md->row_size += fields[i].size;
+    table->row_size += fields[i].size;
   }
 
-  md->row_size = round_up_to_n(md->row_size, 8);
+  table->row_size = round_up_to_n(table->row_size, 8);
 
-  md->header_size = header_size;
-
-  table->metadata = md;
+  table->header_size = header_size;
 
   char * fname;
   assert(asprintf(&fname, "%s/%s", db->storage_path, name) > 0);
@@ -225,7 +222,7 @@ dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_
 
   free(fname);
 
-  size_t total_size = header_size + rows * md->row_size / 8;
+  size_t total_size = header_size + rows * table->row_size / 8;
   total_size = round_up_to_n(total_size, 8);
 
   if (ftruncate(fd, total_size) < 0) ERROR_AT_LINE("Error in reserving %zd bytes for the table with fd %d", total_size, fd);
@@ -271,13 +268,11 @@ dense_db_table_t * dense_db_create_table(dense_db_t * db, char * name, dense_db_
   return table;
 }
 
-dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
+dense_db_table_t * dense_db_table_open(dense_db_t * db, char * name)
 {
   dense_db_table_t * table = calloc(sizeof(*table), 1);
-  dense_db_table_md_t * md = calloc(sizeof(*md), 1);
 
-  table->metadata = md;
-  md->name = strdup(name);
+  table->name = strdup(name);
 
   char * path;
   assert(asprintf(&path, "%s/%s", db->storage_path, name) > 0);
@@ -289,7 +284,7 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
 
   free(path);
 
-  table->size = get_size(fd);
+  table->size = get_file_size(fd);
   table->data = mmap_table(fd, table->size);
 
   char * ptr = table->data;
@@ -298,13 +293,13 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
   memcpy(&buf, ptr, 4);
   ptr += 4;
 
-  md->header_size = be32toh(buf);
+  table->header_size = be32toh(buf);
 
   memcpy(&buf, ptr, 4);
   ptr += 4;
 
-  md->n_fields = be32toh(buf);
-  md->fields = calloc(sizeof(dense_db_field_t), md->n_fields);
+  table->n_fields = be32toh(buf);
+  table->fields = calloc(sizeof(dense_db_field_t), table->n_fields);
 
   memcpy(&buf, ptr, 4);
   ptr += 4;
@@ -312,8 +307,8 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
   table->rows = be32toh(buf);
 
   int i;
-  for (i = 0; i < md->n_fields; i++) {
-    md->fields[i].name = strdup(ptr);
+  for (i = 0; i < table->n_fields; i++) {
+    table->fields[i].name = strdup(ptr);
 
     size_t len = strlen(ptr) + 1;
 
@@ -323,29 +318,23 @@ dense_db_table_t * dense_db_open_table(dense_db_t * db, char * name)
 
     ptr += 4;
 
-    md->fields[i].size = be32toh(buf);
-    md->row_size += md->fields[i].size;
+    table->fields[i].size = be32toh(buf);
+    table->row_size += table->fields[i].size;
   }
-  md->row_size = round_up_to_n(md->row_size, 8);
+  table->row_size = round_up_to_n(table->row_size, 8);
 
   return table;
 }
 
-void dense_db_table_md_destroy(dense_db_table_md_t * md)
-{
-  int i;
-  for (i = 0; i < md->n_fields; i++) {
-    free(md->fields[i].name);
-  }
-
-  free(md->name);
-  free(md->fields);
-  free(md);
-}
-
 void dense_db_table_destroy(dense_db_table_t * table)
 {
-  dense_db_table_md_destroy(table->metadata);
+  int i;
+  for (i = 0; i < table->n_fields; i++) {
+    free(table->fields[i].name);
+  }
+
+  free(table->name);
+  free(table->fields);
 
   if (munmap(table->data, table->size) < 0) ERROR_AT_LINE("Error in munmap");
 

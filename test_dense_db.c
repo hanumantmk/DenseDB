@@ -4,15 +4,15 @@
 
 void pp_stats(dense_db_table_t * table)
 {
-  dense_db_field_t * fields = table->metadata->fields;
-  size_t n_fields = table->metadata->n_fields;
+  dense_db_field_t * fields = table->fields;
+  size_t n_fields = table->n_fields;
 
   printf(
     "Table Name: %s\n"
     "      Rows: %d\n"
     "  Row Size: %d\n"
     "    Fields:\n"
-    , table->metadata->name, table->rows, table->metadata->row_size);
+    , table->name, table->rows, table->row_size);
 
   int i;
   for (i = 0; i < n_fields; i++) {
@@ -22,8 +22,8 @@ void pp_stats(dense_db_table_t * table)
 
 void pp(dense_db_table_t * table)
 {
-  dense_db_field_t * fields = table->metadata->fields;
-  size_t n_fields = table->metadata->n_fields;
+  dense_db_field_t * fields = table->fields;
+  size_t n_fields = table->n_fields;
   size_t rows = table->rows;
 
   dense_db_accessor_t accs[n_fields];
@@ -73,7 +73,7 @@ int main (int argc, char ** argv)
     { "bip2", 2 },
   };
 
-  dense_db_table_t * table = dense_db_create_table(db, "foo", fields, 6, amount);
+  dense_db_table_t * table = dense_db_table_create(db, "foo", fields, 6, amount);
 
   dense_db_accessor_t accs[6];
 
@@ -105,11 +105,13 @@ int main (int argc, char ** argv)
 
   dense_db_table_destroy(table);
 
-  dense_db_open_table(db, "foo");
+  table = dense_db_table_open(db, "foo");
 
   pp_stats(table);
 
   pp(table);
+
+  dense_db_table_destroy(table);
 
   dense_db_destroy(db);
 
