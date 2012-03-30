@@ -21,14 +21,14 @@ void pp_stats(dense_db_table_t * table)
 
   printf(
     "Table Name: %s\n"
-    "      Rows: %d\n"
-    "  Row Size: %d\n"
+    "      Rows: %zu\n"
+    "  Row Size: %zu\n"
     "    Fields:\n"
     , table->name, table->rows, table->row_size);
 
   int i;
   for (i = 0; i < n_fields; i++) {
-    printf("  %s:\t%d\n", fields[i].name, fields[i].size);
+    printf("  %s:\t%zu\n", fields[i].name, fields[i].size);
   }
 }
 

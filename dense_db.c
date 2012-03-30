@@ -22,6 +22,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 #include <stdint.h>
 #include <unistd.h>
 #include <assert.h>
+#include <inttypes.h>
 #include <fcntl.h>
 #include <error.h>
 #include <errno.h>
@@ -47,7 +48,7 @@ static uint64_t bit_get(uint64_t * storage, int size, int offset)
 {
   uint64_t r = (*storage >> offset) & ((1ull << size) - 1ull);
 
-  DEBUG_LOG("%p: %llu = bit_get(%d, %d)\n", storage, r, size, offset);
+  DEBUG_LOG("%p: %" PRIu64 " = bit_get(%d, %d)\n", storage, r, size, offset);
 
   return r;
 }
@@ -56,7 +57,7 @@ static void bit_set(uint64_t * storage, int size, int offset, uint64_t set)
 {
   *storage = (*storage & ~(((1ull << size) - 1ull) << offset)) | (set << offset);
 
-  DEBUG_LOG("%p: bit_set(%d, %d, %llu)\n", storage, size, offset, set);
+  DEBUG_LOG("%p: bit_set(%d, %d, %" PRIu64 ")\n", storage, size, offset, set);
 }
 
 static void bit_fiddle(void * buf, int size, int offset, void * param, int is_read)
