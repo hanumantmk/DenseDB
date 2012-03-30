@@ -113,11 +113,12 @@ static void bit_fiddle(void * buf, int size, int offset, void * param, int is_re
   }
 }
 
-dense_db_t * dense_db_new(char * storage_path)
+dense_db_t * dense_db_new(char * storage_path, int max_fds)
 {
   dense_db_t * db = calloc(sizeof(*db), 1);
 
   db->storage_path = strdup(storage_path);
+  db->max_fds = max_fds;
 
   return db;
 }
@@ -136,6 +137,23 @@ static void * mmap_table(int fd, size_t size)
   if (data == MAP_FAILED) ERROR_AT_LINE("failed to mmap table");
 
   return data;
+}
+
+static void dense_db_table_destroy(dense_db_table_t * table)
+{
+  int i;
+  for (i = 0; i < table->n_fields; i++) {
+    free(table->fields[i].name);
+  }
+
+  free(table->name);
+  free(table->fields);
+
+  if (munmap(table->data, table->size) < 0) ERROR_AT_LINE("Error in munmap");
+
+  if (close(table->fd) < 0) ERROR_AT_LINE("Error in close");
+
+  free(table);
 }
 
 void dense_table_sync(dense_db_table_t * table)
@@ -189,30 +207,105 @@ void dense_db_table_set_int(dense_db_table_t * table, uint64_t row, dense_db_acc
   dense_db_table_set(table, row, acc, &num);
 }
 
+dense_db_table_t * dense_db_table_open(dense_db_t * db, char * name)
+{
+  dense_db_table_t * table = NULL;
+
+  HASH_FIND(hh, db->lookup, name, strlen(name), table);
+
+  if (table) {
+    HASH_DEL(db->lookup, table);
+  } else {
+    if (HASH_COUNT(db->lookup) >= db->max_fds) {
+      dense_db_table_t * to_delete, * temp;
+
+      HASH_ITER(hh, db->lookup, to_delete, temp) {
+	if (! to_delete->refcount) {
+	  HASH_DEL(db->lookup, to_delete);
+
+	  dense_db_table_destroy(to_delete);
+
+	  if (HASH_COUNT(db->lookup) >= db->max_fds) break;
+	}
+      }
+    }
+
+    table = calloc(sizeof(*table), 1);
+
+    table->name = strdup(name);
+
+    char * path;
+    assert(asprintf(&path, "%s/%s", db->storage_path, name) > 0);
+
+    int fd;
+    if ((fd = open(path, O_RDWR)) < 0) ERROR_AT_LINE("Error in open");
+
+    table->fd = fd;
+
+    free(path);
+
+    table->size = get_file_size(fd);
+    table->data = mmap_table(fd, table->size);
+
+    char * ptr = table->data;
+
+    uint32_t buf;
+    memcpy(&buf, ptr, 4);
+    ptr += 4;
+
+    table->header_size = be32toh(buf);
+
+    memcpy(&buf, ptr, 4);
+    ptr += 4;
+
+    table->n_fields = be32toh(buf);
+    table->fields = calloc(sizeof(dense_db_field_t), table->n_fields);
+
+    memcpy(&buf, ptr, 4);
+    ptr += 4;
+
+    table->rows = be32toh(buf);
+
+    int i;
+    for (i = 0; i < table->n_fields; i++) {
+      table->fields[i].name = strdup(ptr);
+
+      size_t len = strlen(ptr) + 1;
+
+      ptr += len;
+
+      memcpy(&buf, ptr, 4);
+
+      ptr += 4;
+
+      table->fields[i].size = be32toh(buf);
+      table->row_size += table->fields[i].size;
+    }
+
+    table->row_size = round_up_to_n(table->row_size, 8);
+    table->db = db;
+  }
+
+  HASH_ADD_KEYPTR(hh, db->lookup, table->name, strlen(table->name), table);
+
+  table->refcount++;
+
+  return table;
+}
+
 dense_db_table_t * dense_db_table_create(dense_db_t * db, char * name, dense_db_field_t * fields, size_t n_fields, size_t rows)
 {
-  dense_db_table_t * table = calloc(sizeof(*table), 1);
-
-  table->name = strdup(name);
-
-  table->fields = malloc(sizeof(dense_db_field_t) * n_fields);
-
-  table->n_fields = n_fields;
   size_t header_size = 12; // to accomodate for the leader header length, n_fields and rows
+  size_t row_size = 0;
 
   int i;
   for (i = 0; i < n_fields; i++) {
-    table->fields[i].name = strdup(fields[i].name);
-    table->fields[i].size = fields[i].size;
-
     header_size += strlen(fields[i].name) + 1;
     header_size += 4;  // 32 bit field lengths;
-    table->row_size += fields[i].size;
+    row_size += fields[i].size;
   }
 
-  table->row_size = round_up_to_n(table->row_size, 8);
-
-  table->header_size = header_size;
+  row_size = round_up_to_n(row_size, 8);
 
   char * fname;
   assert(asprintf(&fname, "%s/%s", db->storage_path, name) > 0);
@@ -222,16 +315,13 @@ dense_db_table_t * dense_db_table_create(dense_db_t * db, char * name, dense_db_
 
   free(fname);
 
-  size_t total_size = header_size + rows * table->row_size / 8;
-  total_size = round_up_to_n(total_size, 8);
+  size_t total_size = round_up_to_n(header_size + rows * row_size / 8, 8);
 
   if (ftruncate(fd, total_size) < 0) ERROR_AT_LINE("Error in reserving %zd bytes for the table with fd %d", total_size, fd);
 
-  table->size = total_size;
-  table->data = mmap_table(fd, total_size);
-  table->fd = fd;
+  void * data = mmap_table(fd, total_size);
 
-  char * ptr = table->data;
+  uint8_t * ptr = data;
 
   // Write the header
   
@@ -261,90 +351,30 @@ dense_db_table_t * dense_db_table_create(dense_db_t * db, char * name, dense_db_
     ptr += 4;
   }
 
-  table->rows = rows;
+  if (msync(data, total_size, MS_SYNC | MS_INVALIDATE) < 0) ERROR_AT_LINE("Error in sync");
+  if (munmap(data, total_size) < 0) ERROR_AT_LINE("Error in munmap");
+  if (close(fd) < 0) ERROR_AT_LINE("Error in close");
 
-  dense_table_sync(table);
-
-  return table;
+  return dense_db_table_open(db, name);
 }
 
-dense_db_table_t * dense_db_table_open(dense_db_t * db, char * name)
+void dense_db_table_close(dense_db_table_t * table)
 {
-  dense_db_table_t * table = calloc(sizeof(*table), 1);
-
-  table->name = strdup(name);
-
-  char * path;
-  assert(asprintf(&path, "%s/%s", db->storage_path, name) > 0);
-
-  int fd;
-  if ((fd = open(path, O_RDWR)) < 0) ERROR_AT_LINE("Error in open");
-
-  table->fd = fd;
-
-  free(path);
-
-  table->size = get_file_size(fd);
-  table->data = mmap_table(fd, table->size);
-
-  char * ptr = table->data;
-
-  uint32_t buf;
-  memcpy(&buf, ptr, 4);
-  ptr += 4;
-
-  table->header_size = be32toh(buf);
-
-  memcpy(&buf, ptr, 4);
-  ptr += 4;
-
-  table->n_fields = be32toh(buf);
-  table->fields = calloc(sizeof(dense_db_field_t), table->n_fields);
-
-  memcpy(&buf, ptr, 4);
-  ptr += 4;
-
-  table->rows = be32toh(buf);
-
-  int i;
-  for (i = 0; i < table->n_fields; i++) {
-    table->fields[i].name = strdup(ptr);
-
-    size_t len = strlen(ptr) + 1;
-
-    ptr += len;
-
-    memcpy(&buf, ptr, 4);
-
-    ptr += 4;
-
-    table->fields[i].size = be32toh(buf);
-    table->row_size += table->fields[i].size;
-  }
-  table->row_size = round_up_to_n(table->row_size, 8);
-
-  return table;
-}
-
-void dense_db_table_destroy(dense_db_table_t * table)
-{
-  int i;
-  for (i = 0; i < table->n_fields; i++) {
-    free(table->fields[i].name);
-  }
-
-  free(table->name);
-  free(table->fields);
-
-  if (munmap(table->data, table->size) < 0) ERROR_AT_LINE("Error in munmap");
-
-  if (close(table->fd) < 0) ERROR_AT_LINE("Error in close");
-
-  free(table);
+  table->refcount--;
 }
 
 void dense_db_destroy(dense_db_t * db)
 {
+  dense_db_table_t * ele, * temp;
+
+  HASH_ITER(hh, db->lookup, ele, temp) {
+    HASH_DEL(db->lookup, ele);
+
+    assert(! ele->refcount);
+
+    dense_db_table_destroy(ele);
+  }
+
   free(db->storage_path);
   free(db);
 }

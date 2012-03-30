@@ -60,7 +60,7 @@ int main (int argc, char ** argv)
 
   int amount = atoi(argv[1]);
 
-  dense_db_t * db = dense_db_new(".");
+  dense_db_t * db = dense_db_new(".", 1);
 
   char foo[] = "There's no place like home";
 
@@ -74,6 +74,10 @@ int main (int argc, char ** argv)
   };
 
   dense_db_table_t * table = dense_db_table_create(db, "foo", fields, 6, amount);
+
+  dense_db_table_close(table);
+
+  table = dense_db_table_open(db, "foo");
 
   dense_db_accessor_t accs[6];
 
@@ -103,15 +107,11 @@ int main (int argc, char ** argv)
 
   pp(table);
 
-  dense_db_table_destroy(table);
+  dense_db_table_close(table);
 
-  table = dense_db_table_open(db, "foo");
+  table = dense_db_table_create(db, "foo2", fields, 6, amount);
 
-  pp_stats(table);
-
-  pp(table);
-
-  dense_db_table_destroy(table);
+  dense_db_table_close(table);
 
   dense_db_destroy(db);
 
